@@ -5,12 +5,11 @@ from dotenv import load_dotenv
 from PIL import Image
 import requests
 from io import BytesIO
-import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
 import google.generativeai as genai_text
 from google import genai as genai_image
 from google.genai import types
-from cloud_upload import upload_image_local
+from cloud_upload import upload_image_local  # your Cloudinary upload function
 
 # PART 2: Load environment variables and configure APIs
 load_dotenv()
@@ -29,9 +28,7 @@ model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-capt
 
 # PART 4: Class for enhancing prompts using Gemini
 class GeminiChatBot:
-    """
-    Uses Gemini text model to enhance/optimize prompts for image generation.
-    """
+    """Uses Gemini text model to enhance/optimize prompts for image generation."""
     def __init__(self, system_prompt=None):
         self.system_prompt = system_prompt or (
             "You are a professional prompt optimizer for image generation. "
@@ -51,54 +48,37 @@ class GeminiChatBot:
         self.chat = self.model.start_chat(history=[])
 
     def enhance_prompt(self, user_prompt: str) -> str:
-        """
-        Enhance the user prompt using Gemini.
-        """
         try:
             response = self.chat.send_message(user_prompt)
             return response.text.strip()
         except Exception as e:
             print(f"Prompt enhancement failed: {e}")
-            return user_prompt 
+            return user_prompt
 
-# PART 5: Utility to open an image from path or URL
-def open_image(image_input):
-    """
-    Open image from local path or URL.
-    """
-    if image_input.startswith("http://") or image_input.startswith("https://"):
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/114.0.0.0 Safari/537.36"
-        }
-        response = requests.get(image_input, headers=headers)
-        response.raise_for_status()
-        image = Image.open(BytesIO(response.content)).convert("RGB")
-    else:
-        image = Image.open(image_input).convert("RGB")
+# PART 5: Utility to open an image from URL
+def open_image(image_url):
+    response = requests.get(image_url)
+    response.raise_for_status()
+    image = Image.open(BytesIO(response.content)).convert("RGB")
     return image
 
 # PART 6: Convert sketch image to descriptive text using BLIP
-def sketch_to_text(image_input):
-    """
-    Convert sketch image to descriptive text using BLIP captioning.
-    """
-    image = open_image(image_input)
+def sketch_to_text(image_url):
+    image = open_image(image_url)
     inputs = processor(images=image, return_tensors="pt")
     out = model.generate(**inputs)
     caption = processor.decode(out[0], skip_special_tokens=True)
     return caption
 
 # PART 7: Main pipeline - sketch to enhanced prompt to generated image
-def generate_image_from_sketch(image_input):
+def generate_image_from_sketch(image_url):
     """
-    Convert sketch to text, enhance prompt, then generate image such that it is a refined version may or may not be a realistic copy.
-    Returns the Cloudinary URL of the generated image.
+    Convert sketch to text, enhance prompt, then generate image and upload to Cloudinary.
+    Always returns the Cloudinary URL.
     """
     try:
         # Step 1: Convert sketch to text
-        sketch_text = sketch_to_text(image_input)
+        sketch_text = sketch_to_text(image_url)
         print(f"\n[Sketch Description]\n{sketch_text}\n")
 
         # Step 2: Enhance prompt using Gemini
@@ -116,25 +96,20 @@ def generate_image_from_sketch(image_input):
             )
         )
 
-        # Step 4: Extract image from response, save, upload, and return Cloudinary URL
-        ext = os.path.splitext(image_input)[1].lower()  # e.g., '.jpg' or '.png'
-        if ext not in ['.png', '.jpg', '.jpeg']:
-            ext = '.png'  # default
-
+        # Step 4: Extract image from response, save, and upload to Cloudinary
         for part in response.candidates[0].content.parts:
             if part.inline_data is not None:
                 image_data = part.inline_data.data
                 os.makedirs("static", exist_ok=True)
-                image_filename = f"generated_image_{uuid.uuid4()}{ext}"
+                image_filename = f"generated_image_{uuid.uuid4()}.png"
                 image_path = os.path.join("static", image_filename)
 
                 with open(image_path, "wb") as f:
                     f.write(image_data)
 
-                # Upload to Cloudinary after saving the image
+                # Upload to Cloudinary
                 cloud_url = upload_image_local(image_path)
                 print("Uploaded to Cloudinary:", cloud_url)
-
                 return cloud_url
 
         raise ValueError("No image data found in the response.")
@@ -145,6 +120,6 @@ def generate_image_from_sketch(image_input):
 
 # PART 8: Main entry point for running the script
 if __name__ == "__main__":
-    sketch_input = input("🖌️ Enter path or URL to your sketch image: ")
+    sketch_input = input("🖌️ Enter URL to your sketch image: ")
     result = generate_image_from_sketch(sketch_input)
-    print("\n[Cloudinary Image URL]\n" + result)
+    print("\n[Cloudinary URL]\n" + result)
